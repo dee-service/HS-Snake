@@ -50,3 +50,5 @@ ToDo.MD
 payload-definition.md
 .gitignore
 log/bot.log.*
+# HSJeeves installers: a server-side folder mounted into the www container (see docker-compose.yml)
+/downloads/

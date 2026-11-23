@@ -73,6 +73,10 @@ services:
     image: ghcr.io/deesnow/hs-snake-www:${WWW_TAG:-latest}
     pull_policy: always
     restart: unless-stopped
+    volumes:
+      # HSJeeves installers (max ~3 versions + versions.json), kept outside the image so
+      # publishing a new installer needs no rebuild. See HSJeeves repo: installer/publish.ps1.
+      - ./downloads:/usr/share/nginx/html/downloads:ro
     networks:
       - internal
     healthcheck:
