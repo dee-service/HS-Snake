@@ -17,17 +17,9 @@ jobs:
       matrix:
         include:
           - name: bot
-            image: ghcr.io/deesnow/hs-snake
+            image: ghcr.io/dee-service/hs-snake
             context: .
             file: docker/bot/Dockerfile
-          - name: rank-api
-            image: ghcr.io/deesnow/hs-snake-rank-api
-            context: ./decktrackerAPI
-            file: decktrackerAPI/Dockerfile
-          - name: www
-            image: ghcr.io/deesnow/hs-snake-www
-            context: .
-            file: www/Dockerfile
 
     steps:
       - name: Checkout
