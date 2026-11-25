@@ -1,5 +1,11 @@
 # HS-Snake — Installation Guide
 
+> **The Docker Compose files, nginx cache config, `.env.example` and DB migration notes moved to the
+> private deployment repo [`dee-service/jeeves-deploy`](https://github.com/dee-service/jeeves-deploy)**
+> (it also runs the rank API and website). This repo now contains only the Discord bot, its
+> Dockerfile, tests and docs. Where this guide says `docker-compose.yml`, `docker/cache/nginx.conf`
+> or `.env.example`, take them from `jeeves-deploy`.
+
 This guide covers three deployment paths:
 
 - **[A] Docker from published image** — recommended for production, no source clone needed
@@ -108,7 +114,8 @@ mkdir -p log data docker/cache pgdata
 
 ```bash
 # docker-compose.yml — defines bot + nginx cache + postgres services
-curl -O https://raw.githubusercontent.com/deesnow/hs-snake/main/docker-compose.yml
+# (jeeves-deploy is private: clone it, or copy the files from it)
+git clone https://github.com/dee-service/jeeves-deploy.git ../jeeves-deploy && cp ../jeeves-deploy/docker-compose.yml .
 
 # nginx.conf — card image proxy cache configuration
 curl --create-dirs -o docker/cache/nginx.conf \
@@ -129,7 +136,7 @@ Paste your values from Step 2. Save with `Ctrl+O` then `Ctrl+X`.
 docker compose up -d
 ```
 
-Docker pulls `ghcr.io/deesnow/hs-snake:latest`, `postgres:16-alpine`, and `nginx:1.27-alpine` on first run, starts all containers, and creates the database schema automatically.
+Docker pulls `ghcr.io/dee-service/hs-snake:latest`, `postgres:16-alpine`, and `nginx:1.27-alpine` on first run, starts all containers, and creates the database schema automatically.
 
 **Verify all containers are running:**
 
@@ -141,7 +148,7 @@ Expected output:
 
 ```
 NAME                  IMAGE                             STATUS
-hs-snake-bot-1        ghcr.io/deesnow/hs-snake:latest   Up X seconds
+hs-snake-bot-1        ghcr.io/dee-service/hs-snake:latest   Up X seconds
 hs-snake-cache-1      nginx:1.27-alpine                 Up X seconds (healthy)
 hs-snake-postgres-1   postgres:16-alpine                Up X seconds (healthy)
 ```
@@ -229,8 +236,8 @@ python -m bot.main
 Open a PowerShell or VS Code terminal in the repo root:
 
 ```powershell
-# Copy env template and fill in your DISCORD_TOKEN
-Copy-Item .env.example .env
+# Copy env template (from the jeeves-deploy repo) and fill in your DISCORD_TOKEN
+Copy-Item ..\jeeves-deploy\.env.example .env
 notepad .env
 
 # Create directories required by Docker bind-mounts
