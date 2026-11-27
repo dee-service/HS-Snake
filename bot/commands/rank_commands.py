@@ -122,6 +122,9 @@ class RankCommands(commands.Cog):
             await tracker_ingest.ingest_recent_matches()
         except asyncpg.exceptions.UndefinedTableError:
             log.warning("rank_tracker_matches not available yet — skipping tracker ingest")
+        except asyncpg.exceptions.UndefinedColumnError:
+            # The season columns are added by jeeves-api's migration, which has to run first.
+            log.warning("rank_tracker_matches lacks the season columns (jeeves-api not migrated yet) — skipping tracker ingest")
         except Exception:
             log.exception("Tracker ingest failed")
 
@@ -553,6 +556,7 @@ class RankCommands(commands.Cog):
         async with get_db() as conn:
             entry, season_id = await self._fetch_entry(conn, battletag, region, mode)
             stats = await _fetch_mode_stats(conn, battletag.lower(), region, mode, season_id, today)
+            season = await self._fetch_season(conn, battletag, region, (mode,))
 
         legend_count = stats["latest_legend_count"]
         season_score = f"{stats['season_score']:.2f}" if stats["season_score"] is not None else "-"
@@ -567,11 +571,12 @@ class RankCommands(commands.Cog):
                 rank_str += f" ({percent:.0f}%)"
             if entry.rating:
                 rank_str += f"  (MMR {entry.rating})"
-        return (
-            f"{header}\n"
-            f"{mode_label}  ->  {rank_str}\n"
-            f"Season Score: {season_score}"
-        )
+        lines = [header, f"{mode_label}  ->  {rank_str}", f"Season Score: {season_score}"]
+        shown = rank_tracker_data.format_season_stats(season.get(mode.lower()))
+        if shown:
+            record, win_rate, streak = shown
+            lines.append(f"Season Record: {record} ({win_rate})  ·  Win Streak: {streak}")
+        return "\n".join(lines)
 
     async def _section_default(self, battletag, region):
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -583,6 +588,7 @@ class RankCommands(commands.Cog):
             wild_entry, wild_season = await self._fetch_entry(conn, battletag, region, "wild")
             std = await _fetch_mode_stats(conn, bt, region, "standard", std_season, today)
             wild = await _fetch_mode_stats(conn, bt, region, "wild", wild_season, today)
+            season = await self._fetch_season(conn, battletag, region, ("standard", "wild"))
 
         def _rank_with_count(rank, legend_count):
             if rank is None:
@@ -609,21 +615,49 @@ class RankCommands(commands.Cog):
         std_dps       = _num(std["today_dps"])
         wild_dps      = _num(wild["today_dps"])
 
+        # Season record from HSJeeves uploads: the rows are left out entirely when neither
+        # format has data, and a format without data shows "-".
+        std_season_stats = rank_tracker_data.format_season_stats(season.get("standard"))
+        wild_season_stats = rank_tracker_data.format_season_stats(season.get("wild"))
+        season_rows = []
+        if std_season_stats or wild_season_stats:
+            for label, i in (("Season W/G", 0), ("Win Rate", 1), ("Win Streak", 2)):
+                season_rows.append((
+                    label,
+                    std_season_stats[i] if std_season_stats else "-",
+                    wild_season_stats[i] if wild_season_stats else "-",
+                ))
+
         label_dps = "Today's Score"
+        cw = max([8] + [len(v) for _, a, b in season_rows for v in (a, b)])
         w = max(len(label_dps), len(std_current), len(wild_current),
                 len(std_best_str), len(wild_best_str), len(std_score), len(wild_score),
-                len(std_dps), len(wild_dps), 8)
+                len(std_dps), len(wild_dps), *(len(label) for label, _, _ in season_rows), 8)
         return "\n".join([
             f"🏆 **{battletag}** — {region}  ·  Season {std_season}",
             "```",
-            f"  {'':<{w}}   Standard   Wild",
-            f"  {'-'*w}   {'-'*8}   {'-'*8}",
-            f"  {'Current Rank':<{w}}   {std_current:<8}   {wild_current:<8}",
-            f"  {'Best Rank':<{w}}   {std_best_str:<8}   {wild_best_str:<8}",
-            f"  {'Season Score':<{w}}   {std_score:<8}   {wild_score:<8}",
-            f"  {label_dps:<{w}}   {std_dps:<8}   {wild_dps:<8}",
+            f"  {'':<{w}}   {'Standard':<{cw}}   Wild",
+            f"  {'-'*w}   {'-'*cw}   {'-'*cw}",
+            f"  {'Current Rank':<{w}}   {std_current:<{cw}}   {wild_current:<{cw}}",
+            f"  {'Best Rank':<{w}}   {std_best_str:<{cw}}   {wild_best_str:<{cw}}",
+            f"  {'Season Score':<{w}}   {std_score:<{cw}}   {wild_score:<{cw}}",
+            f"  {label_dps:<{w}}   {std_dps:<{cw}}   {wild_dps:<{cw}}",
+            *(f"  {label:<{w}}   {a:<{cw}}   {b:<{cw}}" for label, a, b in season_rows),
             "```",
         ])
+
+    @staticmethod
+    async def _fetch_season(conn, battletag, region, modes):
+        """Season stats from HSJeeves uploads; a failure here must never break /rank."""
+        if not any(m in ("standard", "wild") for m in modes):
+            return {}
+        try:
+            return await rank_tracker_data.fetch_season_stats(
+                conn, battletag, region, rank_tracker_data.season_start_utc()
+            )
+        except Exception:
+            log.exception("Season stats lookup failed for %s/%s", battletag, region)
+            return {}
 
     @staticmethod
     async def _fetch_entry(conn, battletag, region, mode):
