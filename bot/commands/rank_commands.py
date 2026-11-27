@@ -122,6 +122,9 @@ class RankCommands(commands.Cog):
             await tracker_ingest.ingest_recent_matches()
         except asyncpg.exceptions.UndefinedTableError:
             log.warning("rank_tracker_matches not available yet — skipping tracker ingest")
+        except asyncpg.exceptions.UndefinedColumnError:
+            # The season columns are added by jeeves-api's migration, which has to run first.
+            log.warning("rank_tracker_matches lacks the season columns (jeeves-api not migrated yet) — skipping tracker ingest")
         except Exception:
             log.exception("Tracker ingest failed")
 

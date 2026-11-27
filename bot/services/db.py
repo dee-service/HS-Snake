@@ -166,6 +166,13 @@ async def _create_schema(conn: asyncpg.Connection) -> None:
             observed_at TIMESTAMPTZ NOT NULL
         );
 
+        -- Season record at the time of a plugin-uploaded match (HSJeeves schemaVersion 2),
+        -- copied by tracker_ingest so wins/games/streak history is available for charts and
+        -- trends. Additive and nullable: leaderboard-scrape rows and older matches stay NULL.
+        ALTER TABLE player_rank_log ADD COLUMN IF NOT EXISTS season_wins  INTEGER;
+        ALTER TABLE player_rank_log ADD COLUMN IF NOT EXISTS season_games INTEGER;
+        ALTER TABLE player_rank_log ADD COLUMN IF NOT EXISTS win_streak   INTEGER;
+
         CREATE INDEX IF NOT EXISTS idx_prl
             ON player_rank_log (battletag, region, mode, season_id, observed_at DESC);
 

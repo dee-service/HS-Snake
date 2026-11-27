@@ -31,7 +31,8 @@ async def ingest_recent_matches() -> int:
         matches = await conn.fetch(
             """
             SELECT u.region, LOWER(u.battletag) AS battletag, LOWER(m.format) AS mode,
-                   m.end_time, m.legend_rank_after
+                   m.end_time, m.legend_rank_after,
+                   m.season_wins, m.season_games, m.win_streak
             FROM rank_tracker_matches m
             JOIN user_battletags u
               ON u.region = m.region AND LOWER(u.battletag) = LOWER(m.player_battletag)
@@ -75,16 +76,40 @@ async def ingest_recent_matches() -> int:
             key = (m["battletag"], *rm)
             best_today[key] = min(best_today.get(key, rank), rank)
             if (m["battletag"], m["region"], m["mode"], m["end_time"]) not in logged:
-                log_rows.append((m["battletag"], m["region"], m["mode"], season_id, rank, None, m["end_time"]))
+                log_rows.append((
+                    m["battletag"], m["region"], m["mode"], season_id, rank, None, m["end_time"],
+                    m["season_wins"], m["season_games"], m["win_streak"],
+                ))
 
         if log_rows:
             await conn.executemany(
                 """
-                INSERT INTO player_rank_log (battletag, region, mode, season_id, rank, rating, observed_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                INSERT INTO player_rank_log
+                    (battletag, region, mode, season_id, rank, rating, observed_at,
+                     season_wins, season_games, win_streak)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                 """,
                 log_rows,
             )
+
+        # Rows logged before the season columns existed (or from an upload without stats at the
+        # time) get them once the match carries them. Matches nothing in the normal case.
+        await conn.execute(
+            """
+            UPDATE player_rank_log p
+            SET season_wins = m.season_wins, season_games = m.season_games, win_streak = m.win_streak
+            FROM rank_tracker_matches m
+            WHERE m.end_time >= $1
+              AND m.game_mode = 'Ranked'
+              AND m.season_games IS NOT NULL
+              AND p.observed_at = m.end_time
+              AND p.battletag = LOWER(m.player_battletag)
+              AND p.region = m.region
+              AND p.mode = LOWER(m.format)
+              AND p.season_games IS NULL
+            """,
+            today_start,
+        )
 
         for (battletag, region, mode), best_rank in best_today.items():
             season_id = season_ids[(region, mode)]
