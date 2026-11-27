@@ -313,7 +313,12 @@ CREATE TABLE player_rank_log (
     season_id   INTEGER NOT NULL,
     rank        INTEGER NOT NULL,
     rating      INTEGER,
-    observed_at TIMESTAMPTZ NOT NULL
+    observed_at TIMESTAMPTZ NOT NULL,
+    -- Season record at the time of a plugin-uploaded match (HSJeeves schemaVersion 2), copied by
+    -- tracker_ingest. Additive and nullable: leaderboard-scrape rows and older matches stay NULL.
+    season_wins  INTEGER,
+    season_games INTEGER,
+    win_streak   INTEGER
 );
 
 CREATE INDEX idx_prl ON player_rank_log (battletag, region, mode, season_id, observed_at DESC);
@@ -436,6 +441,15 @@ Three modules split by concern, together powering `/rankchart` and `/rcc`. No Di
       # open/close/low/high computed in AxisMapper position-space, not raw ordinals
   ```
   The merge is intentionally point-level, not day-level: `player_rank_log` (leaderboard scrape, Legend-only) keeps showing real movement on a day with no tracked match (plugin wasn't running, upload dropped), while `rank_tracker_matches` adds all-league, per-match granularity wherever it's available.
+
+  **Season stats (schemaVersion 2).** HSJeeves uploads `seasonWins`, `seasonGames` and `winStreak` (top-level, optional; the payload contract lives in `jeeves-api/docs/payload-definition.md`), stored in `rank_tracker_matches.season_wins/season_games/win_streak`. Two consumers in the bot:
+  ```
+  async fetch_season_stats(conn, battletag, region, since)
+      → {"standard": {wins, games, streak}, "wild": {...}}   # newest row with stats per format, end_time >= since
+  season_start_utc(now=None) → first instant of the current UTC month
+  format_season_stats(stats) → (record, win_rate, streak) strings, or None when there is nothing to show
+  ```
+  `/rank` renders them (see `/rank [mode] [region]` below). `tracker_ingest.ingest_recent_matches` copies the same three values into the nullable `player_rank_log.season_wins/season_games/win_streak` columns (and back-fills a row that was logged before the match carried them), so wins/games/streak history is available for charts and trends. Both paths tolerate NULLs; the ingest loop logs a warning and skips if jeeves-api has not yet added the columns (jeeves-api is deployed first).
 - **`rank_chart`** — DB access for `player_rank_log`/`player_daily_dps`, and the three Matplotlib renderers:
   ```
   async resolve_days_in_month(conn, region, mode, season_id) → int
@@ -577,6 +591,7 @@ Looks up the user's rank in `ldb_current_entries`.
 - With `mode`: shows that single mode for all regions (or filtered region)
 - BattleTag matching strips `#NNNN` suffix (Blizzard API returns names only)
 - If the DB has no data yet, returns a friendly "loading" message
+- **Season record** (HSJeeves uploads, schemaVersion 2): for Standard and Wild, the default table gains *Season W/G*, *Win Rate* and *Win Streak* rows, and the single-mode view gains one `Season Record: 107/199 (53.8%)  ·  Win Streak: 2` line. Values come from the newest `rank_tracker_matches` row that has season stats, restricted to the current UTC month (seasons are monthly, so last season's numbers are never shown). The rows are left out entirely when neither format has data, a format without data shows `-`, and a failed lookup is logged without breaking `/rank`. At most 3 extra lines, far below Discord's message limit.
 
 ---
 
@@ -823,7 +838,7 @@ services:
 
 Extends `/rankchart`/`/rcc` beyond Legend-only data using `rank_tracker_matches` (per-match HDT RankTracker plugin uploads, all leagues) merged with the existing leaderboard-scrape data. `/rank` was intentionally left untouched. Full task breakdown, design rationale (including two rejected approaches — a flat additive axis offset, and day-level rather than point-level source merging), and per-task verification notes: see `ToDo.MD` (T-41 through T-57).
 
-- [x] **T-41–43** — `decktrackerAPI`: additive `region TEXT` column + index on `rank_tracker_matches`; `MatchUpload.region` (optional, normalized, backward-compatible)
+- [x] **T-41–43** — `decktrackerAPI`: additive `region TEXT` column + index on `rank_tracker_matches`; `MatchUpload.region` (optional, normalized, backward-compatible at the time; jeeves-api now requires it and rejects uploads without a region)
 - [x] **T-44–45** — `season_id.resolve_season_month`/`resolve_season_month_range`: season→calendar-month resolution from the global `ldb_refresh_log`, independent of any specific player's data
 - [x] **T-46–50** — `rank_scale.py`: `league_label`, monotonic `climb_score`, `classify`/`RankPoint`, dual-band `AxisMapper` — pure, unit-tested (`tests/test_rank_scale.py`)
 - [x] **T-51–53** — `rank_tracker_data.py`: `fetch_tracker_points`, true chronological `merge_with_rank_log`, position-space `aggregate_by_day` — unit-tested (`tests/test_rank_tracker_data.py`)
