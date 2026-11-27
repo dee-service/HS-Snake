@@ -156,3 +156,61 @@ def aggregate_by_day(
         )
         for day, positions in positions_by_day.items()
     }
+
+
+# ── Season stats (wins / games / streak uploaded by HSJeeves, schemaVersion 2) ──
+
+def season_start_utc(now=None):
+    """First instant of the current UTC month: ranked seasons are monthly (see season_id.py).
+
+    Rows older than this belong to a previous season, so they are not shown as the
+    current season's record.
+    """
+    now = now or datetime.now(timezone.utc)
+    return now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+
+async def fetch_season_stats(conn, battletag, region, since):
+    """
+    Latest season record per format (Standard / Wild) for one player, from the newest
+    rank_tracker_matches row that carries season stats (schemaVersion 2 uploads) and
+    ended at or after `since` (the start of the current season).
+
+    Returns {"standard": {"wins", "games", "streak"}, "wild": {...}}; a format is
+    missing when there is no usable row. `streak` can be None.
+    """
+    rows = await conn.fetch(
+        """
+        SELECT DISTINCT ON (format) format, season_wins, season_games, win_streak
+        FROM rank_tracker_matches
+        WHERE LOWER(player_battletag) = LOWER($1)
+          AND region = $2
+          AND game_mode = 'Ranked'
+          AND format IN ('Standard', 'Wild')
+          AND season_games IS NOT NULL AND season_wins IS NOT NULL
+          AND end_time >= $3
+        ORDER BY format, end_time DESC
+        """,
+        battletag, region.upper(), since,
+    )
+    return {
+        row["format"].lower(): {
+            "wins": row["season_wins"],
+            "games": row["season_games"],
+            "streak": row["win_streak"],
+        }
+        for row in rows
+    }
+
+
+def format_season_stats(stats):
+    """
+    (record, win_rate, streak) display strings for one format's stats dict, or None
+    when there is nothing to show. Individual missing values become "-".
+    """
+    if not stats or stats.get("games") is None or stats.get("wins") is None:
+        return None
+    wins, games, streak = stats["wins"], stats["games"], stats.get("streak")
+    record = f"{wins}/{games}"
+    win_rate = f"{wins / games * 100:.1f}%" if games > 0 else "-"
+    return record, win_rate, ("-" if streak is None else str(streak))
